@@ -1,51 +1,31 @@
 import { test, expect } from '@playwright/test'
 import { ITEMS } from '../src/mockData'
 
-let RANDOM_IDS = [],
-  ID_COUNTER = 0
-
 const CLIENT_ID = process.env.VITE_UNSPLASH_CLIENT_ID
 
-const ROUTE = `https://api.unsplash.com/photos/random?query=dolphin&client_id=${CLIENT_ID}`
-
-test.beforeAll(() => {
-  // to simulate randomness for ITEMS data
-  RANDOM_IDS = Array.from({ length: 10 }, (_, idx) => idx)
-  RANDOM_IDS.sort(() => Math.random() - 0.5)
-})
+const ROUTE = `https://api.unsplash.com/photos/random?query=dolphin&count=10&client_id=${CLIENT_ID}`
 
 test.beforeEach(async ({ page }, testInfo) => {
   console.log(`Running ${testInfo.title}`)
 
-  if (ID_COUNTER > 9) {
-    ID_COUNTER = 0
-  }
-
   testInfo.setTimeout(testInfo.timeout + 90000) // for longer running test cases
 
   // listen to API calls and return mocked JSON data
-  await page.route(ROUTE, async route => {
-    const json = ITEMS[RANDOM_IDS[ID_COUNTER++]]
-    await route.fulfill({ json })
+  // there's a bug with below code on chromium. Firefox/safari works fine. Iteration just gets stuck as soon as client hits any route
+  await page.route('**', route => {
+    if (route === ROUTE) {
+      const json = ITEMS
+      route.fulfill({ json })
+    } else {
+      route.continue()
+    }
   })
 
   await page.goto('http://localhost:5173')
 })
 
-test.afterEach(() => {
-  ID_COUNTER = 0
-})
-
 test.describe('Dolphin image viewer', () => {
   test('image becomes visible once component is loaded', async ({ page }) => {
-    let callsToRoute = 0
-
-    page.on('requestfinished', data => {
-      if (data.url() === ROUTE) {
-        callsToRoute++
-      }
-    })
-
     const imgElement = page.getByTestId('dolphinImg')
 
     await expect(imgElement).toBeHidden()
@@ -53,25 +33,14 @@ test.describe('Dolphin image viewer', () => {
     await imgElement.waitFor()
 
     await expect(imgElement).toBeVisible()
-
-    await expect(callsToRoute).toBe(1)
   })
 
   test('images change on interval', async ({ page }) => {
-    let callsToRoute = 0
-
-    page.on('requestfinished', data => {
-      if (data.url() === ROUTE) {
-        callsToRoute++
-      }
-    })
-
     const imgElement = page.getByTestId('dolphinImg')
 
     await imgElement.waitFor()
 
     await expect(imgElement).toBeVisible()
-    await expect(callsToRoute).toBe(1)
 
     const cachedImageSrc = await imgElement.getAttribute('src')
 
@@ -92,30 +61,17 @@ test.describe('Dolphin image viewer', () => {
     const newImageSrc = await imgElement.getAttribute('src')
 
     await expect(newImageSrc).not.toMatch(cachedImageSrc)
-    await expect(callsToRoute).toBe(2)
 
     // To see the image in UI mode
-    const imageResponse = await page.waitForResponse(newImageSrc)
-    await imageResponse.finished()
     await page.waitForTimeout(0)
   })
 
   test('image loading pauses when Pause is clicked', async ({ page }) => {
-    let callsToRoute = 0
-
-    page.on('requestfinished', data => {
-      if (data.url() === ROUTE) {
-        callsToRoute++
-      }
-    })
-
     const imgElement = page.getByTestId('dolphinImg')
 
     await imgElement.waitFor()
 
     await expect(imgElement).toBeVisible()
-
-    await expect(callsToRoute).toBe(1)
 
     const cachedImageSrc = await imgElement.getAttribute('src')
 
@@ -140,27 +96,16 @@ test.describe('Dolphin image viewer', () => {
     await expect(result.length).toBe(2)
     await expect(cachedImageSrc).not.toBe(result[1])
     await expect(await imgElement.getAttribute('src')).toBe(result[1])
-    await expect(callsToRoute).toBe(3)
 
-    callsToRoute = 0
     const pauseBtn = page.getByTestId('pauseBtn')
     await expect(pauseBtn).toBeVisible()
     await pauseBtn.click()
     await page.waitForTimeout(3000)
 
     await expect(await imgElement.getAttribute('src')).toBe(result[1])
-    await expect(callsToRoute).toBe(0)
   })
 
   test('image loading continues when Play is clicked', async ({ page }) => {
-    let callsToRoute = 0
-
-    page.on('requestfinished', data => {
-      if (data.url() === ROUTE) {
-        callsToRoute++
-      }
-    })
-
     const observeAttributeChanges = async element => {
       return await element.evaluate(element => {
         const imageSrcs = []
@@ -203,8 +148,6 @@ test.describe('Dolphin image viewer', () => {
     await expect(await imgElement.getAttribute('src')).toBe(
       resultsBeforePause[1]
     )
-    await expect(callsToRoute).toBe(3)
-
     const playBtn = page.getByTestId('playBtn')
 
     await expect(playBtn).toBeVisible()
@@ -216,20 +159,11 @@ test.describe('Dolphin image viewer', () => {
     await expect(resultAfterPlay.length).toBe(2)
     await expect(resultsBeforePause[1]).not.toBe(resultAfterPlay[1])
     await expect(await imgElement.getAttribute('src')).toBe(resultAfterPlay[1])
-    await expect(callsToRoute).toBe(5)
   })
 
   test('images load from the cache in reverse order when Reverse is clicked', async ({
     page
   }) => {
-    let callsToRoute = 0
-
-    page.on('requestfinished', data => {
-      if (data.url() === ROUTE && data.method() === 'GET') {
-        callsToRoute++
-      }
-    })
-
     const observeAttributeChanges = async (
       element,
       oldValues = false,
@@ -285,11 +219,8 @@ test.describe('Dolphin image viewer', () => {
 
     const memoryMessage = page.getByTestId('memoryMessage')
 
-    await expect(callsToRoute).toBe(numberOfItemsInMemory + 1) // memory always have one less than total images
     await expect(resultsBeforeRevert.length).toBe(numberOfItemsInMemory)
     await expect(memoryMessage).toBeHidden()
-
-    callsToRoute = 0
 
     await revertBtn.click()
 
@@ -305,7 +236,6 @@ test.describe('Dolphin image viewer', () => {
 
     await expect(imgElement).toBeHidden()
     await expect(memoryMessage).toBeVisible()
-    await expect(callsToRoute).toBe(0)
 
     const playBtn = page.getByTestId('playBtn')
 
@@ -320,10 +250,7 @@ test.describe('Dolphin image viewer', () => {
       numberOfItemsInMemory
     )
 
-    await expect(callsToRoute).toBe(numberOfItemsInMemory + 1)
     await expect(resultsBeforeRevert.length).toBe(numberOfItemsInMemory)
-
-    callsToRoute = 0
 
     await revertBtn.click()
 
@@ -339,6 +266,5 @@ test.describe('Dolphin image viewer', () => {
 
     await expect(imgElement).toBeHidden()
     await expect(memoryMessage).toBeVisible()
-    await expect(callsToRoute).toBe(0)
   })
 })

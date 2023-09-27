@@ -1,43 +1,45 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useInterval } from '../hooks'
 import { Button } from './Button'
-
-const CLIENT_ID = import.meta.env.VITE_UNSPLASH_CLIENT_ID
+import MainWorker from './../workers/worker?worker'
 
 export const Dolphins = () => {
   const memory = useRef([])
+  const mainWorker = useRef(null)
   const [imageUrl, setImageUrl] = useState()
   const [isIntervalPlaying, setIsIntervalPlaying] = useState(false)
   const [useMemory, setUseMemory] = useState(false)
   const [memoryMessage, setMemoryMessage] = useState('')
-  const controller = useRef(new AbortController())
 
   useInterval(
     async () => {
       if (!useMemory) {
         try {
-          const response = await fetch(
-            `https://api.unsplash.com/photos/random?query=dolphin&client_id=${CLIENT_ID}`,
-            controller.current.signal
-          )
-          const data = await response.json()
-          const image = `${data.urls.raw}?q=75&fm=jpg&w=500&fit=max`
-          if (!imageUrl) {
-            setImageUrl(image)
-            return
-          }
-          // If new image is the same as the one already rendered we skip it
-          if (imageUrl !== image) {
-            // memory always trails by 1 image because current image will be rendered directly
-            memory.current.push(imageUrl)
-            setImageUrl(image)
-          }
-          if (memory.current.length > 5) {
-            memory.current.shift()
+          mainWorker.current.postMessage('Give me some...')
+          mainWorker.current.onmessage = event => {
+            const { message, arrayBuffer } = event.data
+            if (message === "Here's an image") {
+              const blob = new Blob([arrayBuffer], {
+                type: 'image/jpeg'
+              })
+              const image = URL.createObjectURL(blob)
+              if (!imageUrl) {
+                setImageUrl(image)
+                return
+              }
+              // If new image is the same as the one already rendered we skip it
+              if (imageUrl !== image) {
+                // memory always trails by 1 image because current image will be rendered directly
+                memory.current.push(imageUrl)
+                setImageUrl(image)
+              }
+              if (memory.current.length > 5) {
+                memory.current.shift()
+              }
+            }
           }
         } catch (error) {
           console.error(error)
-          controller.current.abort()
         }
       } else {
         if (memory.current.length === 0) {
@@ -54,24 +56,40 @@ export const Dolphins = () => {
   )
 
   useEffect(() => {
+    mainWorker.current = new MainWorker()
+
+    mainWorker.current.postMessage('Start the engines...')
+
     setIsIntervalPlaying(true)
+
+    return () => {
+      mainWorker.current?.terminate()
+    }
   }, [])
 
   const handlePause = useCallback(() => {
-    controller.current.abort()
     setIsIntervalPlaying(false)
   }, [])
 
   const handlePlay = useCallback(() => {
+    if (!mainWorker.current) {
+      mainWorker.current = new MainWorker()
+      mainWorker.current.postMessage('Start the engines...')
+    }
     setMemoryMessage('')
     setIsIntervalPlaying(true)
   }, [])
 
   const handleRevert = useCallback(() => {
-    controller.current.abort()
     setUseMemory(true)
     setIsIntervalPlaying(true)
   }, [])
+
+  const handleStop = () => {
+    setIsIntervalPlaying(false)
+    mainWorker.current?.terminate()
+    mainWorker.current = null
+  }
 
   return (
     <div className="container">
@@ -84,6 +102,9 @@ export const Dolphins = () => {
         </Button>
         <Button testId="revertBtn" onClick={handleRevert}>
           Revert
+        </Button>
+        <Button testId="stopBtn" onClick={handleStop}>
+          Stop
         </Button>
       </div>
       {imageUrl && (
